@@ -1693,7 +1693,7 @@
     const a = document.createElement('a');
     a.href = URL.createObjectURL(blob);
     const d = new Date();
-    a.download = 'ao_backup_' + d.getFullYear() +
+    a.download = get(LS.name,'黒') + '_backup_' + d.getFullYear() +
       ('0' + (d.getMonth()+1)).slice(-2) + ('0' + d.getDate()).slice(-2) + '.json';
     document.body.appendChild(a);
     a.click();
