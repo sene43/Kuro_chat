@@ -776,6 +776,8 @@
   <button class="btn line" data-pane="data" id="exportBtn">📜 この話題を読み物として保存</button>
   <input type="file" id="restoreInput" accept="application/json,.json" hidden>
   <div class="hint" data-pane="data">バックアップにはAPIキーも含まれるから、ファイルは人に送らず大切に保管してね🔐</div>
+  <button class="btn line" data-pane="data" id="clearKeysBtn">🔑 APIキーだけを消す</button>
+  <div class="hint" data-pane="data">キー欄を空にして保存しても前のキーは残る仕組みにしたよ（うっかり消え防止）。本当に消したい時だけここから。</div>
   <div class="hint" data-pane="data" id="storageMeter" style="margin-top:8px"></div>
   <button class="btn ghost" data-pane="data" id="clearBtn">この話題の履歴を消す</button>
 </div>
@@ -1259,6 +1261,7 @@
     }
     history.forEach((m, idx) => {
       if (m.hidden) return;
+      if (m.imgp){ addPromptBubble(m.text, false); return; }
       let el;
       if (m.diary) el = addDiaryBubble(m.text, false, m.label, m.ts);
       else el = addBubble(m.role === 'model' ? 'ai' : 'user', m.text, false, m.ts);
@@ -1504,7 +1507,7 @@
     const imgs = !image ? [] : (Array.isArray(image) ? image : [image]);
 
     // 会話履歴を共通形式に
-    const turns = history.slice(-histDepth()).map(m => ({
+    const turns = history.filter(m => !m.imgp).slice(-histDepth()).map(m => ({
       role: m.role === 'model' ? 'assistant' : 'user',
       text: m.text
     }));
@@ -1570,7 +1573,7 @@
     } else {
       const apiKey = get(LS.key,'');
       if (!apiKey) throw new Error('GeminiのAPIキーが未設定だよ。⚙︎で入れてね');
-      const msgs = history.slice(-histDepth()).map(m => ({
+      const msgs = history.filter(m => !m.imgp).slice(-histDepth()).map(m => ({
         role: m.role,
         parts: [{ text: m.text }]
       }));
@@ -1659,7 +1662,7 @@
       if (provider === 'gemini' && /no longer available|interactions/i.test(err.message)){
         const gKey = get(LS.key,'');
         let convo = fullSystemPrompt() + '\n\n【これまでの会話】\n';
-        history.slice(-histDepth()).forEach(m => {
+        history.filter(m => !m.imgp).slice(-histDepth()).forEach(m => {
           convo += (m.role === 'model' ? '相手' : 'ユーザー') + '：' + m.text + '\n';
         });
         if (extraHiddenPrompt) convo += 'ユーザー：' + extraHiddenPrompt + '\n';
@@ -1927,7 +1930,11 @@
     scrollBottom();
   }
 
-  function addPromptBubble(text){
+  function addPromptBubble(text, save){
+    if (save){
+      history.push({ role:'model', text: text, imgp: true, ts: Date.now() });
+      saveHistory();
+    }
     const d = document.createElement('div');
     d.className = 'msg memo';
     const label = document.createElement('div');
@@ -1962,7 +1969,7 @@
       const look = get(LS.imgLook,'').trim();
       const cname = get(LS.name,'黒');
       const uname = get(LS.uname,'') || '私';
-      const conv = history.filter(m => !m.hidden && !m.diary).slice(-10)
+      const conv = history.filter(m => !m.hidden && !m.diary && !m.imgp).slice(-10)
         .map(m => (m.role === 'model' ? cname : uname) + '：' + m.text).join('\n');
       const p = '次の会話の「いまの場面」を、画像生成AIに渡すプロンプトにしてください。\n' +
         (look ? '【登場人物の見た目・画風（必ず反映）】\n' + look + '\n\n' : '') +
@@ -1984,7 +1991,7 @@
         try { if (data.usageMetadata) addTokens(data.usageMetadata.promptTokenCount, data.usageMetadata.candidatesTokenCount, 'gemma-4-31b-it'); } catch(e){}
         try { txt = stripLeak(txt); } catch(e){}
         txt = (txt || '').trim();
-        if (txt) addPromptBubble(txt);
+        if (txt) addPromptBubble(txt, true);
         else addBubble('error','プロンプトが空だったよ。もう一度試してみて');
       }
     } catch(e){
@@ -2007,7 +2014,7 @@
     // すでに知っていること＝キャラ設定＋自己紹介＋思い出ノート＋頭の中ノート
     const known = [get(LS.sys, DEFAULT_SYS), get(LS.uintro,''), mem, amem]
       .filter(Boolean).join('\n');
-    const conv = history.filter(m => !m.hidden && !m.diary).slice(-24)
+    const conv = history.filter(m => !m.hidden && !m.diary && !m.imgp).slice(-24)
       .map(m => (m.role === 'model' ? cname : uname) + '：' + m.text).join('\n');
     if (conv.length < 60) return;
     const d = new Date();
@@ -2767,6 +2774,13 @@
     setTimeout(() => { btn.textContent = '🔄 使えるモデル一覧を取得'; }, 3000);
   });
 
+  document.getElementById('clearKeysBtn').addEventListener('click', () => {
+    if (!confirm('保存されているAPIキー（Gemini・OpenAI・Anthropic・OpenRouter）を全部消す？会話や思い出は消えないよ')) return;
+    [LS.key, LS.oaKey, LS.antKey, LS.orKey].forEach(k => localStorage.removeItem(k));
+    ['apiKey','oaKey','antKey','orKey'].forEach(id => { document.getElementById(id).value = ''; });
+    alert('APIキーを消したよ');
+  });
+
   document.getElementById('autoMemClear').addEventListener('click', () => {
     if (!confirm('自動でたまった「頭の中」のメモを全部消す？（あなたが書いた思い出ノートは消えないよ）')) return;
     localStorage.removeItem(LS.amem);
@@ -2889,10 +2903,15 @@
   overlay.addEventListener('click', requestCloseSheets);
 
   document.getElementById('saveBtn').addEventListener('click', () => {
-    localStorage.setItem(LS.key, document.getElementById('apiKey').value.trim());
-    localStorage.setItem(LS.oaKey, document.getElementById('oaKey').value.trim());
-    localStorage.setItem(LS.antKey, document.getElementById('antKey').value.trim());
-    localStorage.setItem(LS.orKey, document.getElementById('orKey').value.trim());
+    // キー欄が空のときは前のキーを守る（iPhoneがパスワード欄を勝手に空にすることがあるため）
+    const saveKey = (id, lsk) => {
+      const v = document.getElementById(id).value.trim();
+      if (v) localStorage.setItem(lsk, v);
+    };
+    saveKey('apiKey', LS.key);
+    saveKey('oaKey', LS.oaKey);
+    saveKey('antKey', LS.antKey);
+    saveKey('orKey', LS.orKey);
     localStorage.setItem(LS.model, selectedModel());
     localStorage.setItem(LS.imgModel, document.getElementById('imgModel').value.trim() || 'gemini-2.5-flash-image');
     localStorage.setItem(LS.imgLook, document.getElementById('imgLook').value.trim());
